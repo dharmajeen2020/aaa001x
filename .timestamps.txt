@@ -1,0 +1,3 @@
+# type=d --ignore=.git --ignore=.timestamps.txt
+202003102106.37 README.md
+202003112235.45 parsesqm.rb

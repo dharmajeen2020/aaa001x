@@ -51,17 +51,18 @@ def dumptokenstack(tokenstack, msg)
   p "-----------------------------------------------"
 end
 
-# <stmt>:: <colexpr> [<wherephrase>] [<orderbyphrase>]
+#
+# <stmt>:: <colexprs> [<wherephrase>] [<orderbyphrase>]
 # <colexprs>:: <colexpr> | <colexprs> , <colexpr>
-# <colexpr>:: <colexprbase> [ as 'nkckname' ]
+# <colexpr>:: <colexprbase> [ as 'nickname' ]
 # <colexpr>:: 'colname' | <function> ( <arg> )
 # <function>:: count | sum | max | min
-# <wherephrase<:: where <expr>
+# <wherephrase>:: where <expr>
 # <orderbyphrase>:: order by 'colname' [asc|desc]
-# <orderbycollist>:: <orderbycol< | <orderbycollist> , <orderbycol>
+# <orderbycollist>:: <orderbycol> | <orderbycollist> , <orderbycol>
 # <orderbycol>:: 'colname' [asc|desc]
 
-def function(tokenstack)
+def funcinfo(tokenstack)
   colexprt = nil
   ret = tokenstack.pop
   if !ret.nil?
@@ -84,7 +85,7 @@ def function(tokenstack)
 end
 
 def parsecolexpr(tokenstack)
-  colexprt = function(tokenstack)
+  colexprt = funcinfo(tokenstack)
   if colexprt.nil?
     ret = tokenstack.pop
     token = ret[:token]
@@ -120,7 +121,7 @@ end
 # expr:: <term>
 # <term>:: <factor> | <term> && <factor> | <term> || <factor>
 # <factor>:: ( <expr> ) | <val>
-# <exprt>:: <name> =
+# <expr1>:: <name> =
 
 # <ex0>:: <val> = <val>
 # <val>:: <COLNAME> | <string> | <number>
@@ -158,7 +159,7 @@ def parseexprs(tokenstack)
   tokenstack.push ret
   lval = parserlval(tokenstack)
   expr[:lval] = lval
-  if lval[:type]  != ''
+  if lval[:type] != ''
     ops = tokenstack.pop
     if !ops.nil?
       rvals = parserlval(tokenstack)
@@ -186,10 +187,10 @@ def parseorderby(tokenstack)
   if !ret.nil? && ret[:token] == 'by'
     cols = []
     while ret = tokenstack.pop
-      break if ret[:token] ==';'
+      break if ret[:token] == ';'
       colname = {:name => ret[:token], :dir => 'asc'}
       ret = tokenstack.pop
-      if !ret.nil? && ret[:token] != ';' && ret[:token] != ',' 
+      if !ret.nil? && ret[:token] != ';' && ret[:token] != ','
         dir = ret[:token]
         colname[:dir] = dir if dir == 'asc' || dir == 'desc'
       end
@@ -201,7 +202,6 @@ def parseorderby(tokenstack)
   orderbyphrase
 end
 
-
 def parsesqm(tokenstack)
 
   wherephrase = nil
@@ -211,7 +211,7 @@ def parsesqm(tokenstack)
   while !(ret = tokenstack.pop).nil?
     token = ret[:token]
     if token == 'where'
-      wherephraase = parsewhere(tokenstack)
+      wherephrase = parsewhere(tokenstack)
     elsif token == 'order'
       orderbyphrase = parseorderby(tokenstack)
     elsif token == ';'
@@ -229,17 +229,20 @@ def parsesqm(tokenstack)
 end
 
 s = '会社 as "COM", 所属,'
-s += 'count(case when 月  = 4 then 1 else 0 end) as "4 月",'
-s += 'count(case when 月  = 5 then 1 else 0 end) as "5 月",'
-s += 'count(case when 月  = 6 then 1 else 0 end) as "6 月",'
-s += 'count(case when 月  = 7 then 1 else 0 end) as "7 月"'
+s += 'count(case when 月 =  4 then 1 else 0 end) as "4 月",'
+s += 'count(case when 月 =  5 then 1 else 0 end) as " 5月 ",'
+s += 'count(case when 月 =  6 then 1 else 0 end) as " 6 月 ",'
+s += 'count(case when 月 =  7 then 1 else 0 end) as " 7 月"'
 s += ' where 年度 = 2020 order by 会社, 所属 desc;'
+
 
 ## lex test
 s1 = ''
-s1 += ' +会社, 所属,  a = 1 && b = 1, '
+s1 += ' +会社, 所属 ,  a = 1 && b = 1, '
+s1 += 'count(case when 月 = 4 then 1 else 0 end) as "4 月",'
 s1 += '(a<B)&&(b>=c||CVCC=0)'
-#s1 += 'a="A , S & ' + "TRE' D\"" + 'a="STR"mB'
+s1 += 'a="A ,S & ' + "TRE' D'\"" + 'a="STR",B'
+s1 = ''
 print "S1=[" + s1 + "]" + "\n"
 l = lex(s1)
 dumptokenstack(l, "LEX TEST")
@@ -259,7 +262,8 @@ p "[3]" + ret[:orderby].to_s
 # expr test
 s2 = ''
 s2 += '(a > 3)'
-s2 += ''
+s2 = ''
+p "S2=[" + s2 + "]"
 tokenstack2 = lex(s2)
 dumptokenstack(tokenstack2, "EXPR TEST")
 ret = parseexprs(tokenstack2)

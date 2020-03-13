@@ -52,15 +52,30 @@ def dumptokenstack(tokenstack, msg)
 end
 
 #
-# <stmt>:: <colexprs> [<wherephrase>] [<orderbyphrase>]
-# <colexprs>:: <colexpr> | <colexprs> , <colexpr>
+# <stmt>:: <collist> [<wherephrase>] [<orderbyphrase>]
+# <collist>:: <colexpr> | <colexpr> , <collist>
 # <colexpr>:: <colexprbase> [ as 'nickname' ]
-# <colexpr>:: 'colname' | <function> ( <arg> )
-# <function>:: count | sum | max | min
-# <wherephrase>:: where <expr>
-# <orderbyphrase>:: order by 'colname' [asc|desc]
-# <orderbycollist>:: <orderbycol> | <orderbycollist> , <orderbycol>
-# <orderbycol>:: 'colname' [asc|desc]
+# <colexprbase>:: COLNAME | <function>
+# <function>:: <functionname> ( <args> )
+# <functionname>:: 'count' | 'sum' | 'max' | 'min'
+# <args>:: <expr> | <expr> , <args>
+# <wherephrase>:: where <condition>
+# <condition>:: <simplecompare> | <simplecompare> [and|or] <condition>
+# <simplecompare>:: <expr> [=|!=|<>|<|>|<=|>=] <expr>
+# <expr>:: COLNAME | STRING | NUMBER | ( <expr> )
+# <expr>:: 'case' 'when' COLNAME 'then' <expr> 'else' <expr> 'end'
+# <orderbyphrase>:: order by <orderbycollist>
+# <orderbycollist>:: <orderbycol> | <orderbycol> , <orderbycollist>
+# <orderbycol>:: COLNAME [asc|desc]
+
+# expr:: <term>
+# <term>:: <factor> | <term> && <factor> | <term> || <factor>
+# <factor>:: ( <expr> ) | <val>
+# <expr1>:: <name> =
+
+# <ex0>:: <val> = <val>
+# <val>:: <COLNAME> | <string> | <number>
+
 
 def funcinfo(tokenstack)
   colexprt = nil
@@ -118,13 +133,6 @@ def parsecolexprs(tokenstack)
   colexprs
 end
 
-# expr:: <term>
-# <term>:: <factor> | <term> && <factor> | <term> || <factor>
-# <factor>:: ( <expr> ) | <val>
-# <expr1>:: <name> =
-
-# <ex0>:: <val> = <val>
-# <val>:: <COLNAME> | <string> | <number>
 
 def parserlval(tokenstack)
   rlvret = {:type => ''}
@@ -172,31 +180,123 @@ def parseexprs(tokenstack)
   expr
 end
 
-def parsewhere(tokenstack)
-  wherephrase = {:phrase => 'where', :cols => []}
+def parseexpr(tokenstack)
+  exprval = {:type => nil, :val => nil}
+  ret = tokenstack.pop
+  if !ret.nil?
+    token = ret[:token]
+    ttype = ret[:ttype]
+    if ttype == 'NAME' || ttype == 'STRING' || ttype == 'NUMBER'
+      exprval[:type] = ttype
+      exprval[:val] = token
+    elsif token == '('
+      stack0 = []
+      while s = tokenstack.pop
+        break if s[:token] == ')'
+        stack0.unshift s
+      end
+      if stack0.length > 0
+        exprval[:type] = 'EXPR'
+        exprval[:val] = parseexpr(stack0)
+      end
+    elsif token == 'case'
+      exprval[:type] = ttype
+      exprval[:val] = token
+    else
+      exprval[:type] = ttype
+      exprval[:val] = token
+    end
+  end
+  exprval
+end
 
-  exprs = parseexprs(tokenstack)
-  wherephrase[:exprs] = exprs
+def parsesimplecompare(tokenstack)
+  sc = {:type => 'SIMPLECOMPARE', :op => nil, :lexpr => nil, :rexpr => nil}
+  lexpr = parseexpr(tokenstack)
+  if !lexpr.nil?
+    ret = tokenstack.pop
+    if !ret.nil?
+      token = ret[:token]
+      if token == '=' || token == '!=' || token == '<>' || token == '<' ||
+         token == '>' || token == '<=' || token == '>='
+        rexpr = parseexpr(tokenstack)
+        if !rexpr.nil?
+          sc[:op] = token
+          sc[:lexpr] = lexpr
+          sc[:rexpr] = rexpr
+          sc[:status] = 'OK'
+        else
+          sc[:status] = 'ERROR'
+        end
+      else
+        sc[:status] = 'ERROR'
+      end
+    else
+      sc[:status] = 'ERROR'
+    end
+  else
+    sc[:status] = 'ERROR'
+  end
+  sc
+end
+
+def parsewhere(tokenstack)
+  wherephrase = {:phrase => 'where', :condition => nil}
+
+  condition = parsesimplecompare(tokenstack)
+  wherephrase[:condition] = condition
   wherephrase
 end
 
+def parseorderbycol(tokenstack)
+  ret = tokenstack.pop
+  return nil if ret.nil? || ret[:token] == ';'
+  colname = {:name => ret[:token], :dir => 'asc'}
+  ret = tokenstack.pop
+  if !ret.nil?
+    dir = ret[:token]
+    if dir == 'asc' || dir == 'desc'
+      colname[:dir] = dir
+    else
+      tokenstack.push ret
+    end
+  end
+  colname
+end
+
+def parseorderbycollist(tokenstack)
+  cols = []
+  while colname = parseorderbycol(tokenstack)
+    cols << colname
+    ret = tokenstack.pop
+    if !ret.nil? && ret[:token] == ','
+      colname = parseorderbycollist(tokenstack)
+      if colname.nil? || colname.length == 0
+        cols = nil
+        # p 'SYNTAX ERROR'
+        break
+      else
+        cols << colname
+        cols.flatten!
+      end
+    end
+  end
+  cols
+end
 
 def parseorderby(tokenstack)
-  orderbyphrase = {:phrase => 'orderby', :cols => []}
+  orderbyphrase = {:phrase => 'orderby', :cols => [], :status => nil}
   ret = tokenstack.pop
   if !ret.nil? && ret[:token] == 'by'
-    cols = []
-    while ret = tokenstack.pop
-      break if ret[:token] == ';'
-      colname = {:name => ret[:token], :dir => 'asc'}
-      ret = tokenstack.pop
-      if !ret.nil? && ret[:token] != ';' && ret[:token] != ','
-        dir = ret[:token]
-        colname[:dir] = dir if dir == 'asc' || dir == 'desc'
-      end
-      cols << colname
+    cols = parseorderbycollist(tokenstack)
+    if !cols.nil? && cols.length != 0
+      orderbyphrase[:cols] = cols
+      orderbyphrase[:status] = 'OK'
+    else
+      orderbyphrase[:status] = 'ERROR'
     end
-    orderbyphrase[:cols] = cols
+  else
+    orderbyphrase[:status] = 'ERROR'
   end
   tokenstack.push ret if !ret.nil? && ret[:token] == ';'
   orderbyphrase
@@ -228,6 +328,7 @@ def parsesqm(tokenstack)
   {:colexprs => colexprs, :where => wherephrase, :orderby => orderbyphrase}
 end
 
+############################################################################
 s = '会社 as "COM", 所属,'
 s += 'count(case when 月 =  4 then 1 else 0 end) as "4 月",'
 s += 'count(case when 月 =  5 then 1 else 0 end) as " 5月 ",'
@@ -243,28 +344,53 @@ s1 += 'count(case when 月 = 4 then 1 else 0 end) as "4 月",'
 s1 += '(a<B)&&(b>=c||CVCC=0)'
 s1 += 'a="A ,S & ' + "TRE' D'\"" + 'a="STR",B'
 s1 = ''
-print "S1=[" + s1 + "]" + "\n"
-l = lex(s1)
-dumptokenstack(l, "LEX TEST")
+if s1 != ''
+  print "S1=[" + s1 + "]" + "\n"
+  l = lex(s1)
+  dumptokenstack(l, "LEX TEST")
+end
 
 
 ## parse test
-#s = ''
-tokenstack = lex(s)
-dumptokenstack(tokenstack, "S")
-ret = parsesqm(tokenstack)
+s = ''
+if s != ''
+  tokenstack = lex(s)
+  dumptokenstack(tokenstack, "S")
+  ret = parsesqm(tokenstack)
 
-p "[1]" + ret[:colexprs].to_s
-p "[2]" + ret[:where].to_s
-p "[3]" + ret[:orderby].to_s
+  p "[1]" + ret[:colexprs].to_s
+  p "[2]" + ret[:where].to_s
+  p "[3]" + ret[:orderby].to_s
+end
 
 
 # expr test
 s2 = ''
 s2 += '(a > 3)'
 s2 = ''
-p "S2=[" + s2 + "]"
-tokenstack2 = lex(s2)
-dumptokenstack(tokenstack2, "EXPR TEST")
-ret = parseexprs(tokenstack2)
-p ret.to_s
+if s2 != ''
+  p "S2=[" + s2 + "]"
+  tokenstack2 = lex(s2)
+  dumptokenstack(tokenstack2, "EXPR TEST")
+  ret = parseexprs(tokenstack2)
+  p ret.to_s
+end
+
+# order by test
+s = ''
+s += 'by AAA desc, BBB , CCC desc , B'
+s = ''
+if s != ''
+  p "S=[" + s + "]"
+  tokenstack = lex(s)
+  dumptokenstack(tokenstack, "ORDERBY")
+  orderbyphrase = parseorderby(tokenstack)
+  p orderbyphrase.to_s
+end
+
+##
+s = '(A + B)'
+t = lex(s)
+r = parseexpr(t)
+p r.to_s
+##
